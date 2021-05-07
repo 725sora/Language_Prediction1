@@ -1,0 +1,155 @@
+---
+title: "Language Prediction Milestone Report"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(dplyr)
+library(stringr)
+library(tidytext)
+library(tokenizers)
+library(ggplot2)
+```
+
+## Executive Summary
+
+The goal of this project is to build an app, which can predict the next word in English language, given a single, two or three words of a sentence. 
+To achive this, several texts from news, blogs and twitter are analyzed. The most frequent used words as well as two or three often successive used combination of words are parsed. It is checked how much of a given text can be covered by those combination of pairs or tripel of successive words.
+In this milestone report the further steps for creating a prediction model is sketched.
+
+
+## Reading, Cleaning the Data and Sampling
+
+The given data, which can be used to train a prediction model can be downloaded from the site https://d396qusza40orc.cloudfront.net/dsscapstone/dataset/Coursera-SwiftKey.zip. It consists of news articles, blogs and twitter tweets.
+
+```{r reading data, echo=FALSE, warning=FALSE}
+news <- readLines("en_US.news.txt", encoding = "UTF-8")
+blogs <- readLines("en_US.blogs.txt", encoding = "UTF-8")
+twitter <- readLines("en_US.twitter.txt", encoding = "UTF-8")
+```
+
+The following table shows the size of the given data.
+
+```{r basic summary,  echo=FALSE}
+sources <- c("news", "blogs", "twitter")
+number_lines <- c(length(news), length(blogs), length(twitter))
+number_words_news <- sapply(strsplit(news, " "), length) %>% sum
+number_words_blogs <- sapply(strsplit(blogs, " "), length) %>% sum
+number_words_twitter <- sapply(strsplit(twitter, " "), length) %>% sum
+number_words <- c(number_words_news, number_words_blogs, number_words_twitter)
+data.frame(sources, number_lines, number_words)
+```
+
+Since we do not want to count profane words, we will remove all articles and tweets, which contain those. The list of profane words are downloaded from this site: https://github.com/RobertJGabriel/Google-profanity-words.
+
+```{r removing profane words, echo=FALSE}
+profane <- readLines("list.txt", encoding = "UTF-8")
+news_good <- news
+blogs_good <- blogs
+twitter_good <- twitter
+for (i in 1:length(profane)) {news_good <- news_good[!(str_detect(news_good, profane[i]))]}
+for (i in 1:length(profane)) {blogs_good <- blogs_good[!(str_detect(blogs_good, profane[i]))]}
+for (i in 1:length(profane)) {twitter_good <- twitter_good[!(str_detect(twitter_good, profane[i]))]}
+```
+
+It takes too much time for calculating, so we will reduce the sample data to 10% of the whole data set. The three data sets is summarized to one for further analysis.
+
+```{r sampling, echo=FALSE}
+news_good_sample <- sample(news_good, size=length(news_good)*0.1)
+blogs_good_sample <- sample(blogs_good, size=length(blogs_good)*0.1)
+twitter_good_sample <- sample(twitter_good, size=length(twitter_good)*0.1)
+txt_all <- append(append(news_good_sample, blogs_good_sample), twitter_good_sample)
+```
+
+The data size is now as follows:
+
+```{r data size, echo=FALSE}
+number_words_all <- sapply(strsplit(txt_all, " "), length) %>% sum
+sum_txt_all <- data.frame(length(txt_all), number_words_all)
+names(sum_txt_all) <- c("Numer of Lines", "Number of the Words")
+sum_txt_all
+```
+
+## Exploratory Data Analysis
+
+### Unigrams, Bigrams and Trigrams
+
+For further exploring of the data, the will separate the lines in unigrams, bigrams and trigrams. The list of all unigrams, bigrams and trigrams is sorted after frequency and the ten most frequent ones are summarized in this report. 
+
+
+```{r tokenizing, echo=FALSE}
+txt_all_token <- tibble(text= txt_all) %>% unnest_tokens(word, text)
+```
+
+The ten most frequend used words are these below:
+
+```{r word frequencies, echo=FALSE}
+txt_all_token_top <- txt_all_token %>% count(word, sort = TRUE)
+txt_all_token_top
+head(txt_all_token_top, 10) %>% ggplot() + geom_bar(aes(x=reorder(word, n), y=n), stat = "identity", fill = "blue") + coord_flip() + xlab("words") + ylab("frequency") + ggtitle("The 10 most frequent used Words")
+```
+
+Similar to the most frequent words, we will separate the data into bigrams and trigrams and list up the ten most frequent ones below:
+
+```{r 2-grams, echo=FALSE}
+bi_grams <- tokenize_ngrams(txt_all, n=2)
+bi_grams <- as.data.frame(unlist(bi_grams))
+bi_grams <- na.omit(bi_grams)
+names(bi_grams) <- c("words")
+bi_grams_top <- bi_grams %>% 
+  count(words, sort=TRUE) 
+
+head(bi_grams_top, 10) %>% ggplot() + geom_bar(aes(x=reorder(words, n), y=n), stat = "identity", fill = "blue") + coord_flip() + ylab("frequency") + xlab("2-grams") + ggtitle("The 10 most frequent used Bigrams")
+```
+
+```{r 3-grams, echo=FALSE}
+tri_grams <- tokenize_ngrams(txt_all, n=3)
+tri_grams <- as.data.frame(unlist(tri_grams))
+tri_grams <- na.omit(tri_grams)
+names(tri_grams) <- c("words")
+tri_grams_top <- tri_grams %>% 
+  count(words, sort=TRUE) 
+
+head(tri_grams_top, 10) %>% ggplot() + geom_bar(aes(x=reorder(words, n), y=n), stat = "identity", fill = "blue") + coord_flip() + ylab("frequency") + xlab("3-grams") + ggtitle("The 10 most frequent used Trigrams")
+```
+
+### Coverage of the whole Text by Unigrams
+
+To get a better understanding about the text, frequency of the words, we will analyse how many words of the sorted unigrams are necessary to cover a certain percentage of the whole text.
+
+```{r, echo=FALSE}
+num_words <- count(txt_all_token)
+words_needed <- function(x) {
+  topsum <- 0
+  top_count <- 1
+  while(num_words*x - topsum >0) {
+    topsum <- topsum + txt_all_token_top[top_count,2]
+    top_count <- top_count + 1
+  }
+  top_count
+}
+words_needed_df <- data.frame()
+for (i in seq(0.1,0.9, by=0.1)) {
+  words_needed_df <- rbind(words_needed_df, c(i, words_needed(i)))
+}
+names(word_needed_df) <- c("percentage", "Number of Tokens")
+words_needed_df %>% ggplot(aes(x=percent, y=number_tokens)) + geom_line(color="red") + ggtitle("Coverage of the whole Text by the most frequently used Words")
+```
+
+We can see, that up to about 75% of the whole text can be covered by few frequently used words. Above 75%, the number of used words increases nearly exponentially.
+
+
+## Next Steps
+
+*    A possible design of a prediction model for the next word looks as follows:
+    * Given one or two preceding words, the predicting model function looks up these words in the list of 2- or 3-grams and picks up the 2- or 3-gram, which starts with this or these words.
+    * This function returns the word with the highest frequency in the sorted list of 2-grams and 3-grams, which starts with the given words. 
+    * E.g. in case of "in" the 2-gram model delivers "the" and in case of "thanks for" the 3-gram-model delivers "of".
+*   A basic implementation for this model is already implemented.
+*   A more advanced solution is planned, which gives
+    *   a probability for the prediction
+    *   more possible predictions with probabilities for each prediction.
+*   Furthermore it is planned to implement a shiny app, in which the user can type in some words and gets the predictions.
+
+The code used here is available here:
